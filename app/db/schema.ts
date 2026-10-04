@@ -1,5 +1,32 @@
 import { pgTable, serial, text, varchar, numeric, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  passwordHash: text("password_hash").notNull(),
+  role: varchar("role", { length: 50 }).notNull().default("customer"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const addresses = pgTable("addresses", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  street: text("street").notNull(),
+  city: varchar("city", { length: 100 }).notNull(),
+  state: varchar("state", { length: 100 }).notNull(),
+  postalCode: varchar("postal_code", { length: 20 }).notNull(),
+  country: varchar("country", { length: 100 }).notNull().default("India"),
+  isDefault: boolean("is_default").notNull().default(false),
+});
+
+export const wishlists = pgTable("wishlists", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  productId: integer("product_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
@@ -31,6 +58,7 @@ export const categories = pgTable("categories", {
 export const orders = pgTable("orders", {
   id: serial("id").primaryKey(),
   orderNumber: varchar("order_number", { length: 64 }).notNull().unique(),
+  userId: integer("user_id"),
   customerName: varchar("customer_name", { length: 255 }).notNull(),
   customerEmail: varchar("customer_email", { length: 255 }).notNull(),
   customerPhone: varchar("customer_phone", { length: 50 }),
@@ -71,6 +99,10 @@ export const reviews = pgTable("reviews", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Address = typeof addresses.$inferSelect;
+export type Wishlist = typeof wishlists.$inferSelect;
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;
 export type Order = typeof orders.$inferSelect;

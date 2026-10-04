@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLoaderData, useFetcher, Link } from "react-router";
 import type { Route } from "./+types/admin";
-import { getProducts, getOrders, createProduct, isDatabaseConfigured } from "~/db/index.server";
+import { getProducts, getOrders, createProduct, isDatabaseConfigured, getCategories, createCategory, deleteProduct, deleteCategory } from "~/db/index.server";
 import { isCloudinaryConfigured } from "~/lib/cloudinary.server";
 import { getOptimizedImageUrl } from "~/lib/cloudinary";
 import {
@@ -25,14 +25,16 @@ export function meta() {
 }
 
 export async function loader() {
-  const [products, orders] = await Promise.all([
+  const [products, orders, categories] = await Promise.all([
     getProducts({ limit: 50 }),
     getOrders(),
+    getCategories(),
   ]);
 
   return {
     products,
     orders,
+    categories,
     isNeonLive: isDatabaseConfigured(),
     isCloudinaryLive: isCloudinaryConfigured,
   };
@@ -82,15 +84,45 @@ export async function action({ request }: Route.ActionArgs) {
     return Response.json({ success: true, product: created });
   }
 
+  if (actionType === "createCategory") {
+    const name = String(formData.get("name") || "");
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const description = String(formData.get("description") || "");
+    const image = String(formData.get("image") || "");
+    if (!name || !image) return Response.json({ error: "Name and image are required" }, { status: 400 });
+    try {
+      const cat = await createCategory({ name, slug, description, image });
+      return Response.json({ success: true, category: cat });
+    } catch (err: any) {
+      return Response.json({ error: err.message || "Failed to create category" }, { status: 500 });
+    }
+  }
+
+  if (actionType === "deleteProduct") {
+    const id = parseInt(String(formData.get("id") || "0"), 10);
+    if (id) await deleteProduct(id);
+    return Response.json({ success: true });
+  }
+
+  if (actionType === "deleteCategory") {
+    const id = parseInt(String(formData.get("id") || "0"), 10);
+    if (id) await deleteCategory(id);
+    return Response.json({ success: true });
+  }
+
   return Response.json({ error: "Invalid action" }, { status: 400 });
 }
 
 export default function AdminPortal() {
-  const { products, orders, isNeonLive, isCloudinaryLive } = useLoaderData<typeof loader>();
+  const { products, orders, categories, isNeonLive, isCloudinaryLive } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
 
-  const [activeTab, setActiveTab] = useState<"products" | "orders" | "settings">("products");
+  const [activeTab, setActiveTab] = useState<"products" | "categories" | "orders" | "settings">("products");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categoryImageUrl, setCategoryImageUrl] = useState("");
+  const [categoryImagePreview, setCategoryImagePreview] = useState("");
+  const [isCategoryUploading, setIsCategoryUploading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedImageUrl, setUploadedImageUrl] = useState("");
   const [imagePreview, setImagePreview] = useState("");
@@ -252,6 +284,19 @@ export default function AdminPortal() {
           <Cloud className="w-4 h-4" />
           <span>Cloud Configuration Guide</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab("categories")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase transition cursor-pointer ${
+            activeTab === "categories"
+              ? "bg-zinc-800 text-[#c8ff00] border border-zinc-700"
+              : "text-zinc-400 hover:text-white"
+          }`}
+          id="admin-tab-categories"
+        >
+          <Database className="w-4 h-4" />
+          <span>Categories ({(categories as any[]).length})</span>
+        </button>
       </div>
 
       {/* TAB CONTENT: PRODUCTS */}
@@ -296,17 +341,168 @@ export default function AdminPortal() {
                       <td className="py-3 px-4 text-right">
                         <Link
                           to={`/products/${p.slug}`}
-                          className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-white transition"
+                          className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-white transition mr-3"
                         >
                           <Eye className="w-3.5 h-3.5" />
                           <span>View</span>
                         </Link>
+                        <fetcher.Form method="post" className="inline">
+                          <input type="hidden" name="actionType" value="deleteProduct" />
+                          <input type="hidden" name="id" value={p.id} />
+                          <button type="submit"
+                            className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition"
+                            onClick={(e) => { if (!confirm(`Delete "${p.name}"?`)) e.preventDefault(); }}>
+                            <X className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        </fetcher.Form>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: CATEGORIES */}
+      {activeTab === "categories" && (
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-black text-white uppercase tracking-wider">
+              Category Management
+            </h2>
+            <button
+              id="add-category-btn"
+              onClick={() => { setCategoryImageUrl(""); setCategoryImagePreview(""); setIsCategoryModalOpen(true); }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#c8ff00] hover:bg-[#b2e600] text-black font-bold text-xs uppercase tracking-wider transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              New Category
+            </button>
+          </div>
+
+          {/* Category Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {(categories as any[]).map((cat: any) => (
+              <div key={cat.id} className="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden group">
+                <div className="aspect-video overflow-hidden">
+                  <img
+                    src={cat.image}
+                    alt={cat.name}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  />
+                </div>
+                <div className="p-3">
+                  <p className="text-white font-bold text-sm">{cat.name}</p>
+                  {cat.slug && <p className="text-zinc-500 text-xs">{cat.slug}</p>}
+                  {cat.description && <p className="text-zinc-400 text-xs mt-1 line-clamp-2">{cat.description}</p>}
+                  <fetcher.Form method="post" className="mt-3">
+                    <input type="hidden" name="actionType" value="deleteCategory" />
+                    <input type="hidden" name="id" value={cat.id} />
+                    <button type="submit"
+                      className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition font-bold uppercase tracking-wider"
+                      onClick={(e) => { if (!confirm(`Delete category "${cat.name}"?`)) e.preventDefault(); }}>
+                      <X className="w-3 h-3" />
+                      Delete
+                    </button>
+                  </fetcher.Form>
+                </div>
+              </div>
+            ))}
+            {(categories as any[]).length === 0 && (
+              <div className="col-span-4 text-center py-12 text-zinc-500">
+                <Database className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No categories yet. Create your first one.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== ADD CATEGORY MODAL ===== */}
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsCategoryModalOpen(false)} />
+          <div className="relative w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-2xl p-6 shadow-2xl z-10">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-black text-white uppercase tracking-wider">New Category</h2>
+              <button onClick={() => setIsCategoryModalOpen(false)} className="text-zinc-500 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <fetcher.Form
+              method="post"
+              className="space-y-4"
+              onSubmit={() => setIsCategoryModalOpen(false)}
+            >
+              <input type="hidden" name="actionType" value="createCategory" />
+              <input type="hidden" name="image" value={categoryImageUrl} />
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Category Name *</label>
+                <input type="text" name="name" required placeholder="e.g. Hoodies"
+                  className="w-full px-3 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-white text-sm focus:border-[#c8ff00] focus:outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Description</label>
+                <textarea name="description" rows={2} placeholder="Brief category description..."
+                  className="w-full px-3 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-white text-sm focus:border-[#c8ff00] focus:outline-none resize-none" />
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Category Image *</label>
+                <label className="flex flex-col items-center justify-center gap-2 w-full h-32 border-2 border-dashed border-zinc-700 rounded-lg cursor-pointer hover:border-[#c8ff00]/50 transition bg-zinc-900 relative overflow-hidden">
+                  {categoryImagePreview ? (
+                    <img src={categoryImagePreview} alt="Preview" className="absolute inset-0 w-full h-full object-cover opacity-60" />
+                  ) : null}
+                  <div className="relative z-10 text-center">
+                    <Upload className="w-6 h-6 mx-auto mb-1 text-zinc-500" />
+                    <span className="text-xs text-zinc-400">
+                      {isCategoryUploading ? "Uploading..." : categoryImageUrl ? "Image Ready ✓" : "Click to upload"}
+                    </span>
+                  </div>
+                  <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = async () => {
+                        const b64 = reader.result as string;
+                        setCategoryImagePreview(b64);
+                        setIsCategoryUploading(true);
+                        try {
+                          const res = await fetch("/api/upload", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ image: b64 }),
+                          });
+                          const data = await res.json();
+                          if (data.url) setCategoryImageUrl(data.url);
+                        } catch (err) { console.error(err); }
+                        finally { setIsCategoryUploading(false); }
+                      };
+                      reader.readAsDataURL(file);
+                    }} />
+                </label>
+                {categoryImageUrl && (
+                  <p className="mt-1 text-[10px] text-emerald-400 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Uploaded to Cloudinary
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="submit"
+                  disabled={!categoryImageUrl || isCategoryUploading}
+                  className="flex-1 py-2.5 rounded-lg bg-[#c8ff00] hover:bg-[#b2e600] text-black font-bold text-sm uppercase tracking-wider transition disabled:opacity-40">
+                  Create Category
+                </button>
+                <button type="button" onClick={() => setIsCategoryModalOpen(false)}
+                  className="px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white text-sm font-bold transition">
+                  Cancel
+                </button>
+              </div>
+            </fetcher.Form>
           </div>
         </div>
       )}

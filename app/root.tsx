@@ -5,6 +5,7 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
 } from "react-router";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -12,6 +13,8 @@ import { CartProvider } from "./context/cart-context";
 import { Navbar } from "./components/Navbar";
 import { CartDrawer } from "./components/CartDrawer";
 import { Footer } from "./components/Footer";
+import { getUser } from "./lib/auth.server";
+import { getWishlistByUser } from "./db/index.server";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -20,11 +23,21 @@ export const links: Route.LinksFunction = () => [
     href: "https://fonts.gstatic.com",
     crossOrigin: "anonymous",
   },
-  {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap",
-  },
 ];
+
+export async function loader({ request }: Route.LoaderArgs) {
+  try {
+    const user = await getUser(request);
+    let wishlistCount = 0;
+    if (user) {
+      const wishlist = await getWishlistByUser(user.id);
+      wishlistCount = wishlist.length;
+    }
+    return { user, wishlistCount };
+  } catch {
+    return { user: null, wishlistCount: 0 };
+  }
+}
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -34,14 +47,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <style>{`
+          * { font-family: 'Times New Roman', Times, serif !important; }
+        `}</style>
       </head>
       <body className="min-h-screen flex flex-col bg-[#09090b] text-zinc-100 antialiased selection:bg-[#c8ff00] selection:text-black">
-        <CartProvider>
-          <Navbar />
-          <CartDrawer />
-          <div className="flex-1 flex flex-col">{children}</div>
-          <Footer />
-        </CartProvider>
+        {children}
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -50,7 +61,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  const data = useLoaderData<typeof loader>();
+  const user = data?.user ?? null;
+  const wishlistCount = data?.wishlistCount ?? 0;
+
+  return (
+    <CartProvider>
+      <Navbar user={user} wishlistCount={wishlistCount} />
+      <CartDrawer />
+      <div className="flex-1 flex flex-col">
+        <Outlet />
+      </div>
+      <Footer />
+    </CartProvider>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
@@ -59,10 +83,10 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let stack: string | undefined;
 
   if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404 - Drop Not Found" : "Error";
+    message = error.status === 404 ? "404 — Not Found" : "Error";
     details =
       error.status === 404
-        ? "The apparel or page you are looking for has been archived or does not exist."
+        ? "The page or product you are looking for does not exist."
         : error.statusText || details;
   } else if (import.meta.env.DEV && error && error instanceof Error) {
     details = error.message;
@@ -70,23 +94,29 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   }
 
   return (
-    <main className="py-24 px-4 max-w-3xl mx-auto text-center font-mono">
-      <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-red-950/40 border border-red-500/30 flex items-center justify-center text-red-400 font-bold text-xl">
-        !
-      </div>
-      <h1 className="text-3xl font-black uppercase text-white mb-3">{message}</h1>
-      <p className="text-zinc-400 text-sm mb-8">{details}</p>
-      <a
-        href="/"
-        className="inline-flex items-center px-6 py-3 rounded bg-zinc-900 border border-zinc-700 hover:border-[#c8ff00] text-xs font-mono uppercase text-white tracking-widest transition"
-      >
-        Return to Catalog
-      </a>
-      {stack && (
-        <pre className="mt-8 text-left p-4 rounded bg-zinc-950 border border-zinc-900 text-red-300 text-xs overflow-x-auto">
-          <code>{stack}</code>
-        </pre>
-      )}
-    </main>
+    <CartProvider>
+      <Navbar />
+      <main className="py-24 px-4 max-w-3xl mx-auto text-center flex-1 flex flex-col items-center justify-center">
+        <div className="w-20 h-20 mx-auto mb-8 rounded-full border border-red-500/30 flex items-center justify-center text-red-400 font-black text-3xl"
+          style={{ background: "rgba(127,29,29,0.2)" }}>
+          !
+        </div>
+        <h1 className="text-5xl font-black uppercase text-white mb-4 italic"
+          style={{ fontFamily: "'Times New Roman', serif" }}>{message}</h1>
+        <p className="text-zinc-400 text-lg mb-10" style={{ fontFamily: "'Times New Roman', serif" }}>{details}</p>
+        <a
+          href="/"
+          className="btn-volt px-8 py-4 rounded-lg text-lg inline-block"
+        >
+          Return to Catalog
+        </a>
+        {stack && (
+          <pre className="mt-8 text-left p-4 rounded-xl glass-panel text-red-300 text-xs overflow-x-auto max-w-full">
+            <code>{stack}</code>
+          </pre>
+        )}
+      </main>
+      <Footer />
+    </CartProvider>
   );
 }

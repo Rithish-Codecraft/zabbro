@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/neon-http";
 import { eq, desc, like, or, and } from "drizzle-orm";
 import * as schema from "./schema";
 import { INITIAL_PRODUCTS, INITIAL_CATEGORIES, type MockProduct } from "./mock-data";
+import type { NewUser } from "./schema";
 
 // Fallback in-memory state for development prior to adding DATABASE_URL
 let inMemoryProducts = [...INITIAL_PRODUCTS];
@@ -285,7 +286,227 @@ export async function getOrders() {
 }
 
 export async function getCategories() {
+  const db = getDb();
+  if (db) {
+    try {
+      const rows = await db.select().from(schema.categories);
+      if (rows && rows.length > 0) return rows;
+    } catch (err) {
+      console.warn("Neon getCategories failed:", err);
+    }
+  }
   return INITIAL_CATEGORIES;
 }
 
+export async function createCategory(data: {
+  name: string;
+  slug: string;
+  description?: string;
+  image: string;
+}) {
+  const db = getDb();
+  if (db) {
+    try {
+      const inserted = await db
+        .insert(schema.categories)
+        .values({
+          name: data.name,
+          slug: data.slug,
+          description: data.description || "",
+          image: data.image,
+        })
+        .returning();
+      return inserted[0];
+    } catch (err) {
+      console.error("Neon createCategory error:", err);
+      throw err;
+    }
+  }
+  return null;
+}
+
+export async function deleteCategory(id: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      await db.delete(schema.categories).where(eq(schema.categories.id, id));
+    } catch (err) {
+      console.error("Neon deleteCategory error:", err);
+      throw err;
+    }
+  }
+}
+
+export async function deleteProduct(id: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      await db.delete(schema.products).where(eq(schema.products.id, id));
+    } catch (err) {
+      console.error("Neon deleteProduct error:", err);
+      throw err;
+    }
+  }
+  inMemoryProducts = inMemoryProducts.filter((p) => p.id !== id);
+}
+
+// ===== USER FUNCTIONS =====
+
+export async function getUserById(id: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      const rows = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, id))
+        .limit(1);
+      return rows[0] || null;
+    } catch (err) {
+      console.error("Neon getUserById error:", err);
+    }
+  }
+  return null;
+}
+
+export async function getUserByEmail(email: string) {
+  const db = getDb();
+  if (db) {
+    try {
+      const rows = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.email, email))
+        .limit(1);
+      return rows[0] || null;
+    } catch (err) {
+      console.error("Neon getUserByEmail error:", err);
+    }
+  }
+  return null;
+}
+
+export async function createUser(data: NewUser) {
+  const db = getDb();
+  if (!db) throw new Error("Database not configured");
+  const inserted = await db.insert(schema.users).values(data).returning();
+  return inserted[0];
+}
+
+// ===== ADDRESS FUNCTIONS =====
+
+export async function getAddressesByUser(userId: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      return await db
+        .select()
+        .from(schema.addresses)
+        .where(eq(schema.addresses.userId, userId));
+    } catch (err) {
+      console.error("Neon getAddresses error:", err);
+    }
+  }
+  return [];
+}
+
+export async function createAddress(data: {
+  userId: number;
+  street: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country?: string;
+  isDefault?: boolean;
+}) {
+  const db = getDb();
+  if (!db) throw new Error("Database not configured");
+  // If new address is default, unset all others
+  if (data.isDefault) {
+    await db
+      .update(schema.addresses)
+      .set({ isDefault: false })
+      .where(eq(schema.addresses.userId, data.userId));
+  }
+  const inserted = await db
+    .insert(schema.addresses)
+    .values({
+      userId: data.userId,
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode,
+      country: data.country || "India",
+      isDefault: data.isDefault ?? false,
+    })
+    .returning();
+  return inserted[0];
+}
+
+export async function deleteAddress(id: number) {
+  const db = getDb();
+  if (!db) throw new Error("Database not configured");
+  await db.delete(schema.addresses).where(eq(schema.addresses.id, id));
+}
+
+// ===== WISHLIST FUNCTIONS =====
+
+export async function getWishlistByUser(userId: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      return await db
+        .select()
+        .from(schema.wishlists)
+        .where(eq(schema.wishlists.userId, userId));
+    } catch (err) {
+      console.error("Neon getWishlist error:", err);
+    }
+  }
+  return [];
+}
+
+export async function toggleWishlist(userId: number, productId: number) {
+  const db = getDb();
+  if (!db) throw new Error("Database not configured");
+
+  const existing = await db
+    .select()
+    .from(schema.wishlists)
+    .where(
+      and(
+        eq(schema.wishlists.userId, userId),
+        eq(schema.wishlists.productId, productId)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db.delete(schema.wishlists).where(eq(schema.wishlists.id, existing[0].id));
+    return { action: "removed" };
+  } else {
+    await db.insert(schema.wishlists).values({ userId, productId });
+    return { action: "added" };
+  }
+}
+
+// ===== ORDER HISTORY =====
+
+export async function getOrdersByUser(userId: number) {
+  const db = getDb();
+  if (db) {
+    try {
+      return await db
+        .select()
+        .from(schema.orders)
+        .where(eq(schema.orders.userId, userId))
+        .orderBy(desc(schema.orders.createdAt));
+    } catch (err) {
+      console.error("Neon getOrdersByUser error:", err);
+    }
+  }
+  return [];
+}
+
 export { isDatabaseConfigured };
+
